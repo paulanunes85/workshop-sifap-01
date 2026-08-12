@@ -147,13 +147,14 @@ O sufixo indica **sobre qual entidade** o verbo opera, e cruza direto com os `.d
 
 | Par                   | Programas atribuídos                          | Status de leitura |
 | --------------------- | --------------------------------------------- | ----------------- |
-| 1 · Visão             | `CADBENEF`, `CADDEPEND`, `CADPROG`            | ⬜ ⬜ ⬜            |
-| 2 · Arquitetura       | `BATCHPGT`, `BATCHREL`, `BATCHCON`            | ⬜ ⬜ ⬜            |
-| 3 · Implementação     | `CALCBENF`, `CALCCORR`, `CALCDSCT`            | ⬜ ⬜ ⬜            |
-| 4 · Qualidade         | `VALBENEF`, `VALDOCS`, `VALELEG`              | ⬜ ⬜ ✅            |
-| 5 · Operações         | `CONSBENF`, `RELPGT`, `RELAUDIT`              | ⬜ ⬜ ⬜            |
+| 1 · Visão             | `CADBENEF`, `CADDEPEND`, `CADPROG`            | ✅ ✅ ✅            |
+| 2 · Arquitetura       | `BATCHPGT`, `BATCHREL`, `BATCHCON`            | ✅ ✅ ✅            |
+| 3 · Implementação     | `CALCBENF`, `CALCCORR`, `CALCDSCT`            | ✅ ✅ ✅            |
+| 4 · Qualidade         | `VALBENEF`, `VALDOCS`, `VALELEG`              | ✅ ✅ ✅            |
+| 5 · Operações         | `CONSBENF`, `RELPGT`, `RELAUDIT`              | ✅ ✅ ✅            |
 
-**Cobertura atual: 1 de 15 programas (7%).** `VALELEG.NSN` está registrado em
+**Cobertura: 15 de 15 programas (100%) e 4 de 4 DDMs (100%).**
+156 regras candidatas e 47 perguntas em aberto registradas em
 [`business-rules-catalog.md`](business-rules-catalog.md).
 
 ---

@@ -1,0 +1,102 @@
+%% Mapa de Dependências — SIFAP Legado
+%% Gerado por /map-dependencies (Estágio 1 · @archaeologist)
+%% Escopo: 01-arqueologia/legado-sifap/natural-programs/ (15 programas) × adabas-ddms/ (4 DDMs)
+%% Data: 2026-08-12
+%%
+%% ATENÇÃO: não existe NENHUMA aresta programa→programa.
+%% Busca por CALLNAT, INCLUDE, FETCH, STACK e CALL nos 15 arquivos .NSN retornou ZERO.
+%% Todo o acoplamento do sistema é indireto, através dos arquivos Adabas compartilhados.
+
+flowchart LR
+    classDef prog  fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef data  fill:#0f172a,stroke:#38bdf8,color:#e2e8f0
+    classDef dead  fill:#0f172a,stroke:#b91c1c,color:#e2e8f0
+    classDef ext   fill:#0f172a,stroke:#a16207,color:#e2e8f0
+
+    subgraph CAD["Cadastro"]
+        CADBENEF["CADBENEF"]
+        CADDEPEND["CADDEPEND"]
+        CADPROG["CADPROG"]
+    end
+
+    subgraph VAL["Validação"]
+        VALELEG["VALELEG"]
+        VALBENEF["VALBENEF"]
+        VALDOCS["VALDOCS"]
+    end
+
+    subgraph CALC["Cálculo"]
+        CALCBENF["CALCBENF"]
+        CALCDSCT["CALCDSCT"]
+        CALCCORR["CALCCORR"]
+    end
+
+    subgraph BATCH["Batch"]
+        BATCHPGT["BATCHPGT"]
+        BATCHCON["BATCHCON"]
+        BATCHREL["BATCHREL"]
+    end
+
+    subgraph REL["Consulta e Relatório"]
+        CONSBENF["CONSBENF"]
+        RELPGT["RELPGT"]
+        RELAUDIT["RELAUDIT"]
+    end
+
+    BENEF[("BENEFICIARIO<br/>FNR 150")]
+    PROG[("PROGRAMA-SOCIAL<br/>FNR 151")]
+    PGTO[("PAGAMENTO<br/>FNR 152")]
+    AUD[("AUDITORIA<br/>FNR 153")]
+
+    CNAB[/"Arquivo CNAB 240<br/>WORK FILE 1"/]
+    MAPX["CONSBENF-M01<br/>MAP AUSENTE"]
+
+    %% ---------- BENEFICIARIO (FNR 150) ----------
+    CADBENEF  -->|"FIND L139,L201"| BENEF
+    CADBENEF  ==>|"STORE L197 · UPDATE L213"| BENEF
+    CADDEPEND -->|"FIND L46,L95,L110"| BENEF
+    CADDEPEND ==>|"UPDATE L120"| BENEF
+    VALELEG   -->|"FIND L70"| BENEF
+    CALCBENF  -->|"FIND L148"| BENEF
+    CALCDSCT  -->|"FIND L88,L108"| BENEF
+    BATCHPGT  -->|"READ BY CPF L182"| BENEF
+    BATCHREL  -->|"FIND L112"| BENEF
+    CONSBENF  -->|"FIND CPF L88 · FIND NIS L92"| BENEF
+    RELPGT    -->|"FIND L104"| BENEF
+    VALBENEF  -.->|"VIEW L13 — sem acesso"| BENEF
+    VALDOCS   -.->|"VIEW L13 — sem acesso"| BENEF
+
+    %% ---------- PROGRAMA-SOCIAL (FNR 151) ----------
+    CADPROG  -->|"FIND L77,L109"| PROG
+    CADPROG  ==>|"STORE L102"| PROG
+    VALELEG  -->|"FIND L88"| PROG
+    CALCBENF -->|"FIND L167"| PROG
+    BATCHPGT -->|"FIND L214"| PROG
+
+    %% ---------- PAGAMENTO (FNR 152) ----------
+    BATCHPGT ==>|"STORE L335"| PGTO
+    BATCHPGT -->|"READ L171 · FIND L202"| PGTO
+    CALCBENF ==>|"STORE L286"| PGTO
+    CALCDSCT -->|"FIND L74,L179"| PGTO
+    CALCDSCT ==>|"UPDATE L181"| PGTO
+    CALCCORR -->|"READ L128"| PGTO
+    CALCCORR ==>|"UPDATE L162"| PGTO
+    BATCHCON -->|"FIND L139,L173,L182,L189"| PGTO
+    BATCHCON ==>|"UPDATE L178,L185,L192"| PGTO
+    BATCHREL -->|"READ L105"| PGTO
+    CONSBENF -->|"READ L151"| PGTO
+    RELPGT   -->|"READ L82"| PGTO
+
+    %% ---------- AUDITORIA (FNR 153) ----------
+    BATCHCON -->|"READ L88"| AUD
+    BATCHCON ==>|"STORE L249,L268"| AUD
+    RELAUDIT -->|"READ L92"| AUD
+
+    %% ---------- Externos ----------
+    CNAB -->|"READ WORK FILE L106"| BATCHCON
+    CONSBENF -.->|"USING MAP L69 — não encontrado"| MAPX
+
+    class CADBENEF,CADDEPEND,CADPROG,VALELEG,CALCBENF,CALCDSCT,CALCCORR,BATCHPGT,BATCHCON,BATCHREL,CONSBENF,RELPGT,RELAUDIT prog
+    class VALBENEF,VALDOCS,MAPX dead
+    class BENEF,PROG,PGTO,AUD data
+    class CNAB ext

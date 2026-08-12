@@ -328,21 +328,367 @@ O único programa que toca `AUDITORIA.ddm` é `RELAUDIT` — e apenas para leitu
 | M-18 | Por que o CPF `000.000.000-00` é aceito como válido? | `VALBENEF.NSN:L195-200` | 🔴 **Crítico.** Backdoor de teste em código de produção. |
 | M-19 | Quem autorizou os 8 prefixos de CPF que anulam toda a validação documental, e por que a lista inclui `100` e `999`? | `VALDOCS.NSN:L49-56, L168-181`; cabeçalho "2011 - AJUSTE CHECK ESPEC" | 🔴 **Crítico.** Prefixos como `100` cobrem uma faixa ampla de CPFs reais. Anula inclusive erros já detectados. |
 
+---
+
+## Regras de `BATCHPGT.NSN`
+
+**Programa:** `01-arqueologia/legado-sifap/natural-programs/BATCHPGT.NSN` (~360 linhas) · Par 2 · Arquitetura
+**Cabeçalho:** 1997 criação · 2000 "OTIMIZ ORD CPF" · 2004 log de erros · 2009 "AJUSTE 13O/ABONO" · 2012 novas faixas · **2015 "INC AUDITORIA"**
+**Acesso a dados:** lê `BENEFICIARIO` (150) e `PROGRAMA-SOCIAL` (151); lê e **escreve** `PAGAMENTO` (152)
+
+> 🚨 **O cabeçalho mente.** A linha 14 declara "CHAMA CALCBENF E CALCDSCT" e a documentação §5.1
+> repete a afirmação. **Não existe nenhuma chamada.** O batch reimplementa a lógica de cálculo
+> internamente — o próprio comentário da linha 123 admite: `(MESMA DO CALCBENF)`.
+> Existem, portanto, **duas implementações paralelas** da fórmula de benefício que podem divergir
+> a qualquer manutenção. Ver M-20.
+
+> 🚨 **O cabeçalho mente de novo.** A alteração de 2015 diz "INC AUDITORIA". O programa **não
+> declara a VIEW de `AUDITORIA` nem grava um único registro** de trilha, apesar de fazer `STORE`
+> em produção. Ver M-21.
+
+| #   | Declaração da Regra | Candidata EARS | Fonte | Classificação | Observações |
+| --- | --- | --- | --- | --- | --- |
+| 59 | Quando o processamento iniciar, o sistema deve derivar a competência a partir do ano e mês da data corrente. | Event-driven | `BATCHPGT.NSN:L107-110` | Inferida | A competência **não é parametrizável**. Reprocessar mês anterior é impossível sem alterar a data do sistema. |
+| 60 | O sistema deve processar os beneficiários em ordem crescente de CPF. | Ubiquitous | `BATCHPGT.NSN:L176-182` | **Mistério** | 🚨 A doc §5.1 afirma que a ordenação é **alfabética por nome** e alerta para acumuladores por faixa alfabética. O código lê `BY CPF` desde 2000. Comentário na linha 179: "SISTEMAS DOWNSTREAM DEPENDEM DESTA ORDENACAO". Ver M-22. |
+| 61 | Se o CPF for igual ao do registro anterior, então o sistema deve ignorar o registro. | Unwanted | `BATCHPGT.NSN:L187-192` | Inferida | ⚠️ Um beneficiário com dois vínculos de programa recebe **um único pagamento** — o do primeiro registro lido. |
+| 62 | Se a situação do beneficiário não for `'A'`, então o sistema deve ignorá-lo. | Unwanted | `BATCHPGT.NSN:L194-198` | **Confirmada** | Doc §5.1: "todos os beneficiários ativos são processados". Encadeia com a regra 30 — **quem passou de 75 anos é excluído do pagamento**. |
+| 63 | Se já existir pagamento do beneficiário na competência corrente, então o sistema deve ignorá-lo. | Unwanted | `BATCHPGT.NSN:L200-210` | Inferida | Idempotência por competência. |
+| 64 | Se o programa do beneficiário não existir, então o sistema deve registrar erro e prosseguir. | Unwanted | `BATCHPGT.NSN:L212-226` | **Confirmada** | Doc §5.2: "erros individuais não interrompem o processamento". |
+| 65 | Se o programa não estiver ativo, então o sistema deve ignorar o beneficiário. | Unwanted | `BATCHPGT.NSN:L227-230` | Inferida | Contabilizado como "ignorado", não como erro — some do relatório de erros. |
+| 66 | Onde o código de região estiver entre 1 e 25, o sistema deve aplicar o fator regional da tabela; caso contrário deve aplicar fator 1,0. | Optional | `BATCHPGT.NSN:L239-244` | **Mistério** | 🚨 A tabela tem **27 posições** (`L124-150`) mas só 25 são alcançáveis — as posições 26 e 27 são **código morto**. E o DDM define região como `01-05 ou 99`. Ver M-23. |
+| 67 | O sistema deve aplicar fator familiar de 1,0 sem dependentes; 1,0 + 0,05 por dependente até 2; 1,10 + 0,03 por dependente adicional até 4; e 1,16 + 0,02 acima disso. | Ubiquitous | `BATCHPGT.NSN:L246-259` | Inferida | Escada de 3 faixas, sem suporte documental. RN-013 descreve um **acréscimo fixo por dependente**, não um multiplicador. |
+| 68 | O sistema deve aplicar fator de renda conforme a primeira faixa cujo teto seja maior ou igual à renda familiar (300 → 1,0; 600 → 0,85; 1.000 → 0,70; 1.500 → 0,55; 9.999,99 → 0,40). | Ubiquitous | `BATCHPGT.NSN:L152-162, L261-262` | **Confirmada (parcial)** | RN-018 descreve exatamente esse mecanismo de "primeira faixa cujo limite superior seja ≥ renda" — mas fala em **renda per capita**, e o código usa renda **familiar total** (mesmo defeito de M-02). ⚠️ Renda acima de 9.999,99 deixa `#FATOR-RND` **sem valor atribuído**. |
+| 69 | O sistema deve aplicar fator etário de 1,15 a partir de 65 anos; 1,10 a partir de 60; 1,05 abaixo de 18; e 1,0 nos demais casos. | Ubiquitous | `BATCHPGT.NSN:L264-277` | Inferida | Sem suporte documental. Note que menores de 18 recebem majoração — mas RN-006 veda o cadastro de menores de 16. |
+| 70 | O sistema deve calcular o benefício como valor-base multiplicado pelos fatores regional, familiar, de renda e etário, e em seguida pelo fator de reajuste. | Ubiquitous | `BATCHPGT.NSN:L279-282` | **Mistério** | 🚨 **Reajuste aplicado duas vezes.** `CADPROG` já gravou o valor-base multiplicado por `(1 + reajuste × 0,347215)` (regra 43); aqui ele é multiplicado novamente por `(1 + reajuste)`. Ver M-24. |
+| 71 | O sistema deve truncar todos os valores monetários em centavos, sem arredondamento. | Ubiquitous | `BATCHPGT.NSN:L283-285, L295-296, L300-301, L310-311, L319-320` | **Confirmada** | RN-014: "sempre arredondado para baixo (truncamento)". Implementado por variável inteira intermediária `#VLR-TEMP (N11)`. |
+| 72 | Onde a competência for dezembro, o sistema deve calcular um 13º valor usando apenas os fatores regional e etário, e somá-lo ao bruto. | Optional | `BATCHPGT.NSN:L291-297` | **Mistério** | 🚨 O 13º **ignora** o fator familiar, o fator de renda e o reajuste. RN-006 da lista de pendências marca este cálculo como "Alta prioridade — não documentado". Ver M-25. |
+| 73 | Onde a competência for dezembro e o programa for do tipo assistencial, o sistema deve acrescentar abono de 15% sobre o benefício mensal. | Optional | `BATCHPGT.NSN:L298-303` | **Mistério** | Percentual fixo em código, sem documentação. Beneficia apenas o tipo `'A'`. |
+| 74 | Se o valor bruto for superior a 500,00, então o sistema deve aplicar desconto de 3%. | Unwanted | `BATCHPGT.NSN:L306-312` | **Mistério** | 🚨 Comentário no código: "CALC DESCONTOS SIMPLIFICADO". Ignora completamente `CALCDSCT`, os tipos de desconto da RN-022 e o teto de 30% da RN-021. Ver M-20. |
+| 75 | O sistema deve calcular o líquido como bruto menos descontos, nunca inferior a zero. | Ubiquitous | `BATCHPGT.NSN:L314-320` | Inferida | Piso em zero mascara erro de cálculo em vez de sinalizá-lo. |
+| 76 | Quando o cálculo terminar, o sistema deve gravar o pagamento com situação `'G'` (gerado). | Event-driven | `BATCHPGT.NSN:L322-336` | **Mistério** | 🚨 Doc §5.1 afirma que o registro é gravado com status `'P'` (pendente). O código grava `'G'`. Ambos existem no DDM. Ver M-26. |
+| 77 | O sistema deve numerar o pagamento a partir do maior número existente, incrementando de um. | Ubiquitous | `BATCHPGT.NSN:L170-174, L323` | **Mistério** | 🚨 Sem reserva nem bloqueio. Duas execuções simultâneas geram **números duplicados**. Ver M-27. |
+| 78 | Ao final, o sistema deve exibir totais de processados, gerados, ignorados, erros e somatórios de valores. | Ubiquitous | `BATCHPGT.NSN:L351-365` | Inferida | ⚠️ Não há o limite `MAX-ERROS` (default 100) com `ABEND U4038` descrito na doc §5.2, nem a geração do arquivo de remessa CNAB 240 descrita na §5.1. |
+
+> 🐛 **Ausências relevantes:** o programa não gera arquivo de remessa CNAB 240, não interrompe por
+> excesso de erros, não grava auditoria e não lê os campos `IND-EXIGE-*` do DDM. As estruturas
+> `#LOG-WORK` / `#LOG-ERRO` (`L100-102`) são declaradas e **nunca usadas**.
+
+## Regras de `BATCHCON.NSN`
+
+**Programa:** `01-arqueologia/legado-sifap/natural-programs/BATCHCON.NSN` (~290 linhas) · Par 2 · Arquitetura
+**Cabeçalho:** 2000 criação (Marcos Antônio Ribeiro) · 2005 "INC BANCO REAL" · 2008 ajuste CNAB 240 · 2014 inclusão de auditoria
+**Acesso a dados:** lê arquivo de trabalho CNAB 240; lê e atualiza `PAGAMENTO` (152); **escreve** `AUDITORIA` (153)
+
+| #   | Declaração da Regra | Candidata EARS | Fonte | Classificação | Observações |
+| --- | --- | --- | --- | --- | --- |
+| 79 | Se o tipo do registro CNAB não for `'3'` (detalhe), então o sistema deve ignorá-lo. | Unwanted | `BATCHCON.NSN:L110-117` | Inferida | Header, trailer e lotes descartados sem conferência de totais. |
+| 80 | O sistema deve extrair CPF, valor, data de pagamento, código de retorno e número do documento de posições fixas do registro CNAB 240. | Ubiquitous | `BATCHCON.NSN:L119-130` | Inferida | Posições fixas em código. Qualquer mudança de layout do banco quebra silenciosamente. |
+| 81 | O sistema deve converter o valor recebido de centavos para reais dividindo por 100. | Ubiquitous | `BATCHCON.NSN:L132-135` | Inferida | Conversão alfanumérico → numérico sem tratamento de erro. |
+| 82 | Se não houver pagamento com o mesmo número, CPF e competência, então o sistema deve registrar "NAO ENCONTRADO" e prosseguir. | Unwanted | `BATCHCON.NSN:L140-156` | Inferida | ⚠️ Divergência de chave: o retorno é casado por número de documento, mas o registro não recebe marcação — some do controle. |
+| 83 | Se a diferença absoluta entre o valor do SIFAP e o valor do banco exceder R$ 0,01, então o sistema deve registrar divergência e gravar auditoria. | Unwanted | `BATCHCON.NSN:L158-170` | **Mistério** | 🚨 Em caso de divergência o pagamento **não tem a situação alterada** — permanece como estava, sem sinalização no próprio registro. Só existe rastro na auditoria. Ver M-28. |
+| 84 | Onde o código de retorno for `'00'`, o sistema deve marcar o pagamento com situação `'P'`. | Optional | `BATCHCON.NSN:L174-182` | **Mistério** | 🚨 No DDM, `P = PENDENTE`. Retorno `'00'` é sucesso bancário. O código marca o pagamento **bem-sucedido como pendente**. Ver M-29. |
+| 85 | Onde o código de retorno for `'01'`, o sistema deve marcar o pagamento como `'D'` (devolvido). | Optional | `BATCHCON.NSN:L183-189` | Inferida | Consistente com o DDM. |
+| 86 | Onde o código de retorno for `'02'`, o sistema deve marcar o pagamento como `'E'`. | Optional | `BATCHCON.NSN:L190-196` | **Mistério** | No DDM, `E = EMITIDO`. Retorno `'02'` aparenta ser erro. Mesma confusão semântica de M-29. |
+| 87 | Se o código de retorno não for `'00'`, `'01'` nem `'02'`, então o sistema deve apenas exibir aviso e não alterar o pagamento. | Unwanted | `BATCHCON.NSN:L197-200` | Inferida | Retorno desconhecido é **contabilizado como conciliado** — o `ADD 1 TO #QTD-CONCILIADOS` ocorre antes do `DECIDE`. |
+| 88 | Quando um pagamento for conciliado, o sistema deve gravar registro de auditoria com ação `'CO'`. | Event-driven | `BATCHCON.NSN:L201, L245-259` | **Mistério** | 🚨 No DDM, `CO = CONSULTA`, e a nota registra que ações `'CO'` **não são gravadas desde 2010** por volume. O programa usa `'CO'` para "conciliado" — colisão de código. Ver M-30. |
+| 89 | Quando uma divergência for detectada, o sistema deve gravar auditoria com ação `'DV'`, valor do SIFAP e valor do banco. | Event-driven | `BATCHCON.NSN:L167, L261-278` | **Mistério** | O código `'DV'` **não consta na lista de ações do DDM** (`IN/AL/EX/CO/LG/LO/BT/ER/AU/RE`). |
+| 90 | Ao final, o sistema deve exibir totais de lidos, conciliados, divergentes, não encontrados e registros de auditoria. | Ubiquitous | `BATCHCON.NSN:L230-240` | Inferida | — |
+
+> 🪦 **Código morto preservado deliberadamente.** As linhas `L215-228` contêm toda a integração com
+> o Banco Real, comentada, com a justificativa "BANCO REAL FOI ADQUIRIDO PELO SANTANDER EM 2007 —
+> MANTER CODIGO PARA REFERENCIA HISTORICA". A sub-rotina `CONCILIA-REAL` referenciada **não existe**.
+> A doc §6 registra que as regras de conciliação nunca foram levantadas porque a responsável foi
+> transferida.
+
+## Regras de `CONSBENF.NSN`
+
+**Programa:** `01-arqueologia/legado-sifap/natural-programs/CONSBENF.NSN` (~195 linhas) · Par 5 · Operações
+**Cabeçalho:** 1998 criação (Márcia Helena Oliveira) · **2003 "INC MASCARA CPF"** · 2007 histórico de pagamentos · 2012 ajuste de tela
+**Acesso a dados:** lê `BENEFICIARIO` (150) e `PAGAMENTO` (152). **Somente leitura.**
+
+| #   | Declaração da Regra | Candidata EARS | Fonte | Classificação | Observações |
+| --- | --- | --- | --- | --- | --- |
+| 91 | Se a tela formatada não puder ser carregada, então o sistema deve apresentar entrada alternativa em modo texto. | Unwanted | `CONSBENF.NSN:L69-78` | **Mistério** | 🚨 O programa referencia o mapa `'CONSBENF-M01'`, e **não existe nenhum arquivo `.map` no repositório** — confirmando a ausência sinalizada no inventário. Ver M-31. |
+| 92 | Onde o tipo de busca não for informado, o sistema deve assumir busca por CPF. | Optional | `CONSBENF.NSN:L80-82` | Inferida | — |
+| 93 | Onde o tipo de busca for `'C'`, o sistema deve localizar o beneficiário por CPF; onde for `'N'`, por NIS. | Optional | `CONSBENF.NSN:L86-94` | Inferida | Único programa que consulta por NIS. Reforça M-05 — `NIS` não existe no DDM. |
+| 94 | Se o tipo de busca não for `'C'` nem `'N'`, então o sistema deve recusar a consulta. | Unwanted | `CONSBENF.NSN:L95-97` | Inferida | — |
+| 95 | Se o beneficiário não for encontrado, então o sistema deve informar e encerrar. | Unwanted | `CONSBENF.NSN:L100-103` | Inferida | — |
+| 96 | Quando os dados forem exibidos, o sistema deve mascarar o CPF no formato `***.***.NNN-NN`. | Event-driven | `CONSBENF.NSN:L104-107, L175-190` | **Mistério** | 🚨 Ver M-32 — a máscara vaza dados em um dos caminhos. |
+| 97 | O sistema deve traduzir o código de situação para descrição legível, usando "DESCONHECIDO" para valores fora do domínio. | Ubiquitous | `CONSBENF.NSN:L109-123` | **Confirmada** | Domínio `A/S/C/I/D` idêntico ao DDM e a `VALBENEF` (regra 53). Terceira confirmação de que `'E'` da RN-011 não existe. |
+| 98 | O sistema deve exibir os dados cadastrais e os 12 pagamentos mais recentes do beneficiário. | Ubiquitous | `CONSBENF.NSN:L142-163` | **Mistério** | 🚨 O rótulo diz "ÚLTIMOS 12", mas a leitura é feita na ordem do descritor de CPF, **sem ordenação por competência**. Os 12 exibidos são arbitrários, não os mais recentes. Ver M-33. |
+| 99 | Se não houver pagamentos, o sistema deve informar "NENHUM PAGAMENTO ENCONTRADO". | Unwanted | `CONSBENF.NSN:L165-167` | Inferida | — |
+
+> 🐛 **A máscara protege só o CPF.** Nome completo, endereço, CEP, renda familiar, número de
+> dependentes e NIS são exibidos **em claro** (`L126-140`). Mascarar o CPF e revelar o NIS e a
+> renda não reduz a exposição de dado pessoal sensível.
+
+> 🐛 **Nenhuma consulta é auditada.** Coerente com a nota do DDM (`'CO'` não gravado desde 2010),
+> mas significa que **não há rastro de quem consultou quais beneficiários**.
+
+### Mistérios abertos do Lote B
+
+| ID | Pergunta em aberto | Evidência | Impacto |
+| --- | --- | --- | --- |
+| M-20 | Existem duas implementações do cálculo de benefício e duas de desconto. Qual é a que vale? | `BATCHPGT.NSN:L14, L123, L279-312` vs `CALCBENF.NSN` e `CALCDSCT.NSN` | 🔴 **Crítico.** O batch que paga 4,2 milhões de pessoas usa a sua própria cópia. |
+| M-21 | O que significa a entrada de changelog "2015 — INC AUDITORIA" em um programa que não grava auditoria? | `BATCHPGT.NSN:L10`; ausência de VIEW de `AUDITORIA` | 🟠 Alto. Changelog fantasma; sugere alteração revertida sem atualizar o cabeçalho. |
+| M-22 | A ordenação do batch é por CPF (código) ou alfabética por nome (doc §5.1)? Quais são os "sistemas downstream" que dependem dela? | `BATCHPGT.NSN:L176-182`; `REGRAS-NEGOCIO-2012.md` §5.1 e nota | 🟠 Alto. A doc alerta para acumuladores por faixa alfabética que não existem no código. |
+| M-23 | Por que a tabela de fatores regionais tem 27 posições, o laço lê 25 e o DDM define apenas 01-05 e 99? | `BATCHPGT.NSN:L124-150, L239-244`; `BENEFICIARIO.ddm` campo `BJ`; `PROGRAMA-SOCIAL.ddm` grupo `FA` | 🔴 **Crítico.** Beneficiários da região 99 recebem fator 1,0 e **perdem** o complemento regional que o DDM prevê para a região especial. |
+| M-24 | O fator de reajuste deve ser aplicado no cadastro do programa, no cálculo do pagamento, ou nos dois? | `CADPROG.NSN:L86-88` + `BATCHPGT.NSN:L282`; RN-019 e RN-020 | 🔴 **Crítico.** Aplicação dupla com fórmulas diferentes infla o benefício de forma não auditável. |
+| M-25 | Por que o 13º ignora fator familiar, fator de renda e reajuste? | `BATCHPGT.NSN:L291-297`; `REGRAS-NEGOCIO-2012.md` §6 (marcado "Alta prioridade") | 🟠 Alto. |
+| M-26 | A situação inicial do pagamento é `'G'` (código) ou `'P'` (doc §5.1)? | `BATCHPGT.NSN:L331`; doc §5.1 | 🟠 Alto. Define o que a conciliação deve procurar. |
+| M-27 | Como o sistema evita numeração duplicada de pagamento em execuções concorrentes? | `BATCHPGT.NSN:L170-174, L323`; mesma técnica em `BATCHCON.NSN:L94-98` | 🔴 **Crítico.** 180 milhões de registros sem chave garantidamente única. |
+| M-28 | Por que um pagamento divergente não recebe marcação no próprio registro? | `BATCHCON.NSN:L158-170` | 🟠 Alto. Divergência só existe na auditoria; o pagamento parece normal. |
+| M-29 | O que significam `'P'` e `'E'` na conciliação, se no DDM são "pendente" e "emitido"? | `BATCHCON.NSN:L174-196`; `PAGAMENTO.ddm` campo `DA` | 🔴 **Crítico.** Pagamento confirmado pelo banco fica marcado como pendente. |
+| M-30 | O código de ação `'CO'` significa "consulta" (DDM) ou "conciliado" (BATCHCON)? E o que é `'DV'`? | `BATCHCON.NSN:L251, L267`; `AUDITORIA.ddm` campo `BA` e nota de 2010 | 🟠 Alto. Contamina a trilha de auditoria legal (IN-TCU 63/2010). |
+| M-31 | Onde estão os arquivos `.map` referenciados pelo código? | `CONSBENF.NSN:L69`; `inventory.md` (nenhum `.map` no repositório) | 🟡 Médio. Confirma a ausência sinalizada no inventário. |
+| M-32 | Por que a máscara de CPF revela os três primeiros dígitos quando o CPF tem menos de 11 posições? | `CONSBENF.NSN:L175-190` e comentário `L169-174` ("NAO CORRIGIR SEM APROVACAO DA AUDITORIA") | 🔴 **Crítico.** Vazamento de dado pessoal em caminho conhecido e deliberadamente não corrigido. |
+| M-33 | Os "últimos 12 pagamentos" são realmente os mais recentes? | `CONSBENF.NSN:L142-163` | 🟠 Alto. Leitura sem ordenação por competência. |
+
+---
+
+## Regras de `CALCBENF.NSN`
+
+**Programa:** `01-arqueologia/legado-sifap/natural-programs/CALCBENF.NSN` (~300 linhas) · Par 3 · Implementação
+**Cabeçalho:** 1997 criação · 2001 13º salário · 2004 ajuste fator regional · 2009 abono natalino · 2013 novas faixas de renda
+**Acesso a dados:** lê `BENEFICIARIO` (150) e `PROGRAMA-SOCIAL` (151); **escreve** `PAGAMENTO` (152)
+
+| #   | Declaração da Regra | Candidata EARS | Fonte | Classificação | Observações |
+| --- | --- | --- | --- | --- | --- |
+| 100 | Se o mês da competência não estiver entre 1 e 12, então o sistema deve recusar o cálculo. | Unwanted | `CALCBENF.NSN:L146-149` | Inferida | Não valida o ano. Competência `999901` é aceita. |
+| 101 | Se o beneficiário não estiver com situação `'A'`, então o sistema deve recusar o cálculo. | Unwanted | `CALCBENF.NSN:L163-166` | **Confirmada** | Coerente com a regra 62 do batch. |
+| 102 | Onde o código de região estiver entre 1 e 25, o sistema deve aplicar o fator regional correspondente; caso contrário deve aplicar 1,0. | Optional | `CALCBENF.NSN:L88-119, L181-185` | **Mistério** | 🚨 Ver M-34. Aqui os comentários revelam o mapeamento UF por posição — e ele está **errado e incompleto**. |
+| 103 | O sistema deve aplicar fator familiar em escada conforme a quantidade de dependentes. | Ubiquitous | `CALCBENF.NSN:L187-199` | Inferida | Idêntico à regra 67. Duplicação literal de `BATCHPGT`. |
+| 104 | O sistema deve aplicar o fator da primeira faixa de renda cujo teto seja maior ou igual à renda familiar. | Ubiquitous | `CALCBENF.NSN:L122-132, L201-202` | **Confirmada (parcial)** | Mesmo defeito de renda total × per capita (M-02). Renda acima de 9.999,99 deixa o fator **sem valor**. |
+| 105 | O sistema deve aplicar fator etário conforme as faixas 65+, 60+, menor de 18 e demais. | Ubiquitous | `CALCBENF.NSN:L204-217` | Inferida | Idêntico à regra 69. |
+| 106 | O sistema deve calcular o benefício como base × fator regional × fator familiar × fator de renda × fator etário, e então aplicar o reajuste do programa. | Ubiquitous | `CALCBENF.NSN:L219-227` | **Mistério** | Mesma dupla aplicação de reajuste de M-24. |
+| 107 | O sistema deve truncar valores monetários em centavos. | Ubiquitous | `CALCBENF.NSN:L229-231` | **Confirmada** | RN-014. |
+| 108 | Onde a competência for dezembro, o sistema deve somar um 13º calculado como base × fator regional × fator etário. | Optional | `CALCBENF.NSN:L233-246` | **Mistério** | 🚨 O comentário das linhas 234-236 declara a fórmula como `VLR_BASE * FATOR_REG * (MESES_ATIVOS/12)` — **proporcional**. O código não calcula `MESES_ATIVOS` em lugar nenhum. Ver M-35. |
+| 109 | Onde for dezembro e o programa for do tipo `'A'`, o sistema deve acrescentar abono de 15%. | Optional | `CALCBENF.NSN:L247-256` | **Mistério** | Igual à regra 73. |
+| 110 | O sistema deve aplicar desconto de 3% quando o bruto exceder 500,00. | Unwanted | `CALCBENF.NSN:L258-259, L290-299` | **Mistério** | 🚨 O próprio comentário admite: "CALC DESCONTOS - SIMPLIFICADO (VER CALCDSCT P/ COMPLETO)". `CALCDSCT` **não é chamado** (E-01). Terceira cópia divergente da regra de desconto. |
+| 111 | Quando o cálculo terminar, o sistema deve gravar um novo registro de pagamento com situação `'G'`. | Event-driven | `CALCBENF.NSN:L271-283` | **Mistério** | 🚨🚨 O `STORE` ocorre **sem atribuir `NUM-PAGTO`** e **sem verificar se já existe pagamento na competência**. Ver M-36. |
+
+> 🐛 **Mapeamento regional incorreto** (`CALCBENF.NSN:L88-119`). O comentário da linha 87 declara
+> `01-05=NORTE 06-10=NORDESTE 11-15=SUDESTE 16-20=SUL 21-25=C.OESTE`, mas os comentários por
+> posição contradizem isso:
+>
+> - Posições 19 e 20 são `MS` e `MT` — **Centro-Oeste**, classificadas como Sul.
+> - Posições 24 e 25 são `RR` (Norte) e `SE` (Nordeste), classificadas como Centro-Oeste.
+> - A posição 15 é `REF` — **não é uma UF**, é um marcador de referência com fator 1,0.
+> - **Faltam 3 estados:** `AL`, `PB` e `RN` não aparecem em nenhuma posição.
+> - As posições 26 e 27 são marcadas `RESERVA` e são inalcançáveis (o laço vai até 25).
+
+## Regras de `CALCDSCT.NSN`
+
+**Programa:** `01-arqueologia/legado-sifap/natural-programs/CALCDSCT.NSN` (~215 linhas) · Par 3 · Implementação
+**Cabeçalho:** 1999 criação (Roberto Mendes Junior) · **2007 "INC DESC JUDICIAL"** · 2015 novas alíquotas
+**Acesso a dados:** lê `BENEFICIARIO` (150); lê e **atualiza** `PAGAMENTO` (152)
+
+| #   | Declaração da Regra | Candidata EARS | Fonte | Classificação | Observações |
+| --- | --- | --- | --- | --- | --- |
+| 112 | Se o pagamento informado não existir ou não pertencer ao CPF informado, então o sistema deve recusar. | Unwanted | `CALCDSCT.NSN:L72-86` | Inferida | — |
+| 113 | Se o beneficiário não existir, então o sistema deve recusar. | Unwanted | `CALCDSCT.NSN:L88-95` | Inferida | Usa `*NUMBER(...)`, idioma correto. |
+| 114 | O sistema deve aplicar contribuição social obrigatória de 3%, 5%, 7% ou 9% conforme a faixa do valor bruto (500 / 1.000 / 2.000 / 9.999,99). | Ubiquitous | `CALCDSCT.NSN:L56-64, L99, L200-211` | Inferida | Sem suporte documental. RN-022 lista "contribuição previdenciária" sem alíquotas. Bruto acima de 9.999,99 **não recebe contribuição alguma**. |
+| 115 | O sistema deve calcular o teto de desconto como 30% do valor bruto. | Ubiquitous | `CALCDSCT.NSN:L102-106` | **Confirmada** | RN-021: "o total de descontos não pode exceder 30% do valor bruto". |
+| 116 | O sistema deve ignorar descontos cuja data de fim seja anterior à data corrente ou cuja data de início seja posterior a ela. | Ubiquitous | `CALCDSCT.NSN:L111-118` | **Mistério** | 🚨 A vigência é testada contra a **data de hoje**, não contra a competência do pagamento. Recalcular um pagamento antigo aplica os descontos vigentes hoje. Ver M-37. |
+| 117 | Onde o desconto for judicial, o sistema deve usar o valor fixo quando informado, ou o percentual sobre o bruto. | Optional | `CALCDSCT.NSN:L122-133` | Inferida | — |
+| 118 | **Onde o desconto for judicial, o sistema não deve aplicar o teto de 30%.** | Optional | `CALCDSCT.NSN:L130-131, L179-184` | **Confirmada** | 🎯 Comentário explícito: "JUDICIAL NAO TEM TETO". **Isto confirma a suspeita que a documentação de 2012 não conseguiu validar** (nota da RN-021: "Marcos Antônio mencionou que existe uma exceção para retenções judiciais... não foi possível confirmar no código"). |
+| 119 | Onde o desconto for pensão alimentícia, imposto ou administrativo, o sistema deve calcular por valor fixo ou percentual e somar ao total. | Optional | `CALCDSCT.NSN:L134-160` | Inferida | — |
+| 120 | Onde o desconto for sindical, o sistema deve aplicar 1% do valor bruto. | Optional | `CALCDSCT.NSN:L155-158` | **Mistério** | Percentual fixo em código; ignora o `PCT-DSCT` cadastrado. |
+| 121 | Se o tipo de desconto for desconhecido, então o sistema deve ignorá-lo silenciosamente. | Unwanted | `CALCDSCT.NSN:L172-173` | Inferida | `NONE → IGNORE`. Desconto com tipo inválido some sem aviso. |
+| 122 | Se o total de descontos não judiciais exceder o teto, então o sistema deve reduzir o total ao teto. | Unwanted | `CALCDSCT.NSN:L179-184` | **Mistério** | 🚨 O corte é aplicado ao **acumulado corrente dentro do laço**, então um desconto judicial já somado pode ser **apagado** por um desconto comum processado depois. RN-023 prevê descarte por prioridade, não truncamento do total. Ver M-38. |
+| 123 | Quando o cálculo terminar, o sistema deve atualizar o valor de desconto do pagamento. | Event-driven | `CALCDSCT.NSN:L191-196` | **Mistério** | 🚨 **O valor líquido não é recalculado.** O pagamento fica com `VLR-LIQUIDO` inconsistente com `VLR-BRUTO − VLR-DESCONTO`. Ver M-39. |
+
+> 🐛 **O grupo de descontos está no arquivo errado.** A VIEW declara `DESCONTOS (PE)` dentro de
+> `BENEFICIARIO` (`L24-31`). No DDM, o grupo periódico `CA GRP-DESCONTO` pertence a **`PAGAMENTO`**,
+> e `BENEFICIARIO.ddm` **não tem nenhum grupo de descontos**.
+
+> 🐛 **Quatro taxonomias incompatíveis para tipo de desconto:**
+>
+> | Fonte | Formato | Valores |
+> | --- | --- | --- |
+> | `CALCDSCT.NSN:L26-27` | `A1` | `C` `I` `J` `S` `P` `A` |
+> | `PAGAMENTO.ddm` campo `CB` | `A3` | `IR` `JD` `CS` `PA` `EM` `TX` `OU` `EX` |
+> | `PROGRAMA-SOCIAL.ddm` campo `EA` | `A3` (MU) | idem acima |
+> | `REGRAS-NEGOCIO-2012.md` RN-022 | numérico | `01` a `05` (com `05` marcado "A COMPLETAR") |
+
+## Regras de `CALCCORR.NSN`
+
+**Programa:** `01-arqueologia/legado-sifap/natural-programs/CALCCORR.NSN` (~215 linhas) · Par 3 · Implementação
+**Cabeçalho:** 2001 criação (Patrícia Gomes de Souza) · 2006 novos índices IPCA · 2014 ajuste de período
+**Acesso a dados:** lê e **atualiza** `PAGAMENTO` (152)
+
+| #   | Declaração da Regra | Candidata EARS | Fonte | Classificação | Observações |
+| --- | --- | --- | --- | --- | --- |
+| 124 | Se a competência inicial for maior que a final, então o sistema deve recusar o processamento. | Unwanted | `CALCCORR.NSN:L120-123` | Inferida | — |
+| 125 | O sistema deve processar apenas os pagamentos do CPF informado dentro do intervalo de competências. | Ubiquitous | `CALCCORR.NSN:L129-141` | **Mistério** | 🚨 A leitura é ordenada por CPF, não por competência, mas o laço usa `ESCAPE BOTTOM` ao encontrar competência maior que o fim. Se a ordem física não for crescente por competência, o processamento **para cedo e ignora pagamentos válidos**. |
+| 126 | Se o pagamento já estiver marcado como corrigido, então o sistema deve ignorá-lo. | Unwanted | `CALCCORR.NSN:L143-145` | Inferida | Garante idempotência. |
+| 127 | O sistema deve corrigir o valor bruto multiplicando-o pelo índice IPCA do mês da competência. | Ubiquitous | `CALCCORR.NSN:L147-158, L191-206` | **Mistério** | 🚨🚨 A sub-rotina se chama `CALC-INDICE-ACUM`, mas aplica **um único mês** de IPCA — não acumula nada. Ver M-40. |
+| 128 | Onde o ano da competência não constar na tabela de índices, o sistema deve manter o índice em 1,0. | Optional | `CALCCORR.NSN:L196-204` | **Mistério** | 🚨 A tabela tem espaço para 10 anos e apenas **3 estão carregados** (2010, 2011, 2012), embora o cabeçalho declare "ULTIMA CARGA: 2014". Correções de qualquer outro ano resultam em **zero**, silenciosamente. Ver M-41. |
+| 129 | Se a diferença apurada for positiva, então o sistema deve gravar o valor corrigido, a data e o indicador de correção. | Unwanted | `CALCCORR.NSN:L160-170` | **Mistério** | Diferença negativa (deflação) nunca é aplicada. E o campo recebe o **valor corrigido total**, não a diferença, apesar do nome `VLR-CORRECAO`. |
+| 130 | O sistema deve truncar o valor corrigido em centavos. | Ubiquitous | `CALCCORR.NSN:L153-156` | **Confirmada** | RN-014. |
+| 131 | Ao final, o sistema deve exibir a quantidade de registros corrigidos e o valor total da correção. | Ubiquitous | `CALCCORR.NSN:L174-178` | Inferida | — |
+| 132 | O sistema deve manter, comentado, o bloco de correção do Plano Verão (01/1989 a 01/1991). | Ubiquitous | `CALCCORR.NSN:L100-112` | **Mistério** | 🪦 Código morto preservado com fatores `2,7500` e `1,4289` e a instrução "NAO REMOVER (HISTORICO)". Nenhuma documentação explica os fatores. |
+
+> 🐛 **A correção nunca chega ao valor pago.** O programa grava `VLR-CORRECAO` mas **não atualiza
+> `VLR-LIQUIDO`**. O beneficiário não recebe a diferença. Além disso, os campos `VLR-CORRECAO`,
+> `DT-CORRECAO` e `IND-CORRIGIDO` da VIEW (`L21-23`) **não existem em `PAGAMENTO.ddm`**.
+
+> 🐛 **RN-019 não confere.** A documentação diz que o reajuste anual usa índice de decreto
+> presidencial registrado no subprograma `CALCIDX`. Este programa usa **IPCA em tabela fixa**,
+> e `CALCIDX` não existe no repositório.
+
+## Regras de `BATCHREL.NSN`
+
+**Programa:** `01-arqueologia/legado-sifap/natural-programs/BATCHREL.NSN` (~205 linhas) · Par 2 · Arquitetura
+**Cabeçalho:** 1999 criação (Patrícia Gomes de Souza) · 2006 subtotais por região · 2013 ajuste de formato
+**Acesso a dados:** lê `PAGAMENTO` (152) e `BENEFICIARIO` (150). **Somente leitura.**
+
+| #   | Declaração da Regra | Candidata EARS | Fonte | Classificação | Observações |
+| --- | --- | --- | --- | --- | --- |
+| 133 | O sistema deve consolidar os pagamentos da competência informada por região, por situação e no total geral. | Ubiquitous | `BATCHREL.NSN:L103-172` | Inferida | — |
+| 134 | O sistema deve agrupar as regiões pelas faixas 1-5 (Norte), 6-10 (Nordeste), 11-15 (Sudeste), 16-20 (Sul) e demais (Centro-Oeste). | Ubiquitous | `BATCHREL.NSN:L114-131` | **Mistério** | 🚨 **Quarta codificação regional do sistema.** A faixa "Sul" (16-20) inclui `MS` e `MT`, que são Centro-Oeste em `CALCBENF`. Ver M-34. |
+| 135 | Onde a região do beneficiário não estiver entre 1 e 20, o sistema deve classificá-lo como Centro-Oeste. | Optional | `BATCHREL.NSN:L127-129` | **Mistério** | 🚨 O `ELSE` captura a **região 99** e também o valor **0** (beneficiário não encontrado). Ambos entram no consolidado como **Centro-Oeste**. Ver M-42. |
+| 136 | O sistema deve **arredondar** o valor bruto ao acumular no relatório. | Ubiquitous | `BATCHREL.NSN:L133-140` | **Mistério** | 🚨🚨 O comentário da linha 134 admite: "ARREDONDAMENTO DIFERE DO CALCBENF (ROUND VS TRUNCATE)". O pagamento **trunca**, o relatório **arredonda**. Ver M-43. |
+| 137 | O sistema deve acumular desconto e líquido sem arredondamento. | Ubiquitous | `BATCHREL.NSN:L141-142` | **Mistério** | Só o bruto é arredondado. No relatório, **bruto ≠ desconto + líquido**. |
+| 138 | O sistema deve classificar as situações como Gerado (`G`), Pago (`P`), Cancelado (`C`), Devolvido (`D`) e Estornado (`E`). | Ubiquitous | `BATCHREL.NSN:L78-83, L145-159` | **Mistério** | 🚨🚨 Contradiz o DDM: `P=PENDENTE`, `C=CONFIRMADO`, `E=EMITIDO`. **Um pagamento confirmado é reportado como "CANCELADO".** Ver M-44. |
+| 139 | Se a situação do pagamento não for reconhecida, então o sistema deve contabilizá-la como "Gerado". | Unwanted | `BATCHREL.NSN:L157-158` | Inferida | Situações `X` e `R` do DDM caem aqui e inflam o total de "gerados". |
+| 140 | Ao final, o sistema deve imprimir os resumos por região, por situação e o total geral. | Ubiquitous | `BATCHREL.NSN:L174-200` | Inferida | A paginação (`#MAX-LINHAS`, `#LINHA`, `#PAG`) é declarada e o cabeçalho é impresso **uma única vez** — o controle de página nunca é testado no laço. `#LINHA-REL (A132)` nunca é usada. |
+
+## Regras de `RELPGT.NSN`
+
+**Programa:** `01-arqueologia/legado-sifap/natural-programs/RELPGT.NSN` (~215 linhas) · Par 5 · Operações
+**Cabeçalho:** 1999 criação (Ana Lúcia Pereira) · 2004 ajuste de paginação · 2010 subtotal por programa
+**Acesso a dados:** lê `PAGAMENTO` (152) e `BENEFICIARIO` (150). **Somente leitura.**
+
+| #   | Declaração da Regra | Candidata EARS | Fonte | Classificação | Observações |
+| --- | --- | --- | --- | --- | --- |
+| 141 | O sistema deve listar os pagamentos do intervalo de competências informado. | Ubiquitous | `RELPGT.NSN:L81-85` | Inferida | — |
+| 142 | Onde o código de programa for informado, o sistema deve filtrar apenas os pagamentos desse programa. | Optional | `RELPGT.NSN:L87-90` | Inferida | Filtro em memória, após a leitura. |
+| 143 | Quando o código de programa mudar em relação ao registro anterior, o sistema deve imprimir o subtotal do programa. | Event-driven | `RELPGT.NSN:L92-99` | **Mistério** | 🚨 A leitura é ordenada por **competência**, mas a quebra é por **programa**. Como a ordem não acompanha a chave de quebra, o relatório gera **vários subtotais parciais do mesmo programa**. Ver M-45. |
+| 144 | O sistema deve exibir o CPF mascarado no formato `***.NNN.NNN-NN`. | Ubiquitous | `RELPGT.NSN:L108-112` | **Mistério** | 🚨 Mascara apenas os **3 primeiros dígitos** e revela os **8 restantes** — muito mais fraco que a máscara de `CONSBENF` (regra 96). E este relatório é **impresso em papel**. Ver M-46. |
+| 145 | O sistema deve traduzir o tipo de pagamento como Normal (`N`), Décimo (`D`) ou Terceiro (`T`). | Ubiquitous | `RELPGT.NSN:L114-124` | **Mistério** | O valor `'T'` **nunca é gravado** por nenhum programa — branch morto. E "Décimo" e "Terceiro" como tipos separados sugerem que `13º` foi partido em dois por engano. |
+| 146 | O sistema deve traduzir a situação do pagamento como Gerado, Pago, Cancelado, Devolvido ou Estornado. | Ubiquitous | `RELPGT.NSN:L126-141` | **Mistério** | Mesma tradução incorreta de M-44. |
+| 147 | O sistema deve imprimir cabeçalho a cada 61 linhas. | Ubiquitous | `RELPGT.NSN:L143-146, L180-192` | Inferida | Aqui a paginação **funciona**, ao contrário de `BATCHREL`. |
+| 148 | Ao final, o sistema deve imprimir o último subtotal e os totais gerais, incluindo o total de abono. | Ubiquitous | `RELPGT.NSN:L165-178` | Inferida | ⚠️ **Não filtra por situação** — pagamentos cancelados e devolvidos entram nos totais gerais. |
+
+## Regras de `RELAUDIT.NSN`
+
+**Programa:** `01-arqueologia/legado-sifap/natural-programs/RELAUDIT.NSN` (~245 linhas) · Par 5 · Operações
+**Cabeçalho:** 2002 criação (Roberto Mendes Junior) · 2006 inclusão de filtros · 2011 ajuste de formato · **2014 "LIMPEZA RELATORIO" (Fernanda Costa)**
+**Acesso a dados:** lê `AUDITORIA` (153). **Somente leitura.**
+
+| #   | Declaração da Regra | Candidata EARS | Fonte | Classificação | Observações |
+| --- | --- | --- | --- | --- | --- |
+| 149 | Onde a data inicial não for informada, o sistema deve assumir 01/01/1997; onde a final não for informada, deve assumir a data corrente. | Optional | `RELAUDIT.NSN:L82-87` | Inferida | 1997 é a data de criação do SIFAP. |
+| 150 | O sistema deve listar os eventos de auditoria do período, ordenados por data. | Ubiquitous | `RELAUDIT.NSN:L90-98` | Inferida | Varredura completa dos ~25 milhões de registros a partir do início do arquivo. |
+| 151 | **O sistema deve excluir da listagem todos os eventos de exclusão (`'EX'`), contabilizando-os apenas como "filtrados".** | Unwanted | `RELAUDIT.NSN:L100-108` | **Mistério** | 🚨🚨🚨 Ver M-47. O achado mais grave do Estágio 1. |
+| 152 | Onde os filtros de ação, usuário ou tabela forem informados, o sistema deve restringir a listagem a eles. | Optional | `RELAUDIT.NSN:L110-133` | **Mistério** | 🚨 O filtro de exclusões roda **antes** destes. Solicitar explicitamente `ACAO = 'EX'` retorna **zero registros**, sem nenhuma mensagem. |
+| 153 | O sistema deve classificar as ações como Inclusão (`IN`), Alteração (`AL`), Conciliação (`CO`), Consulta (`CN`) e Divergência (`DV`). | Ubiquitous | `RELAUDIT.NSN:L137-157` | **Mistério** | 🚨 No DDM, `CO = CONSULTA`. O relatório rotula todo `'CO'` como **"CONCILIAÇÃO"**, e inventa `'CN'` para consulta — código que **não existe no DDM**. Todo registro histórico de consulta é exibido com o rótulo errado. Ver M-30. |
+| 154 | O sistema deve formatar a hora do evento como `HH:MM:SS`. | Ubiquitous | `RELAUDIT.NSN:L159-163` | Inferida | — |
+| 155 | Onde a saída for impressora, o sistema deve incluir a descrição do evento; na tela, deve omiti-la. | Optional | `RELAUDIT.NSN:L170-186` | Inferida | A versão em tela esconde `DESCRICAO`, onde ficam os detalhes da divergência gravados por `BATCHCON`. |
+| 156 | Ao final, o sistema deve exibir os totais por tipo de ação, incluindo a quantidade de registros filtrados. | Ubiquitous | `RELAUDIT.NSN:L190-208` | Inferida | O total de "filtrados" é a **única pista** de que exclusões foram ocultadas — sem explicar o motivo. |
+
+> 🚨 **M-47 — A trilha de auditoria esconde as exclusões.**
+>
+> ```
+> IF AUDITORIA-V.ACAO = 'EX'
+>   ADD 1 TO #QTD-FILTRADOS
+>   ESCAPE TOP
+> END-IF
+> ```
+>
+> O comentário acima do bloco é explícito: `FILTRO ACAO - EXCLUSOES NAO SAO EXIBIDAS`.
+> A entrada de changelog correspondente é **"15/09/2014 — LIMPEZA RELATORIO"**.
+>
+> O DDM confirma de forma independente, em `AUDITORIA.ddm` (NOTA2):
+> *"CUIDADO - PROGRAMA RELAUDIT.NSN FILTRA ACOES 'EX' NA EXIBICAO. PARA VER EXCLUSOES,
+> CONSULTAR DIRETAMENTE VIA ADABAS ONLINE (SYSAOS)"*.
+>
+> O mesmo DDM declara que a retenção da trilha é **obrigação legal (IN-TCU 63/2010)** e que o
+> arquivo é imutável. O dado **está gravado** — mas o único relatório que existe **não o mostra**.
+> <!-- mystery: quem autorizou ocultar eventos de exclusão do relatório oficial de auditoria em 2014, e quais exclusões ocorreram desde então sem visibilidade -->
+
+### Mistérios abertos do Lote C
+
+| ID | Pergunta em aberto | Evidência | Impacto |
+| --- | --- | --- | --- |
+| M-34 | Qual é a codificação regional correta? Existem **quatro** incompatíveis entre si. | `CALCBENF.NSN:L87-119` (UF por posição, 3 estados faltando) · `BATCHPGT.NSN:L239-244` (1-25) · `BATCHREL.NSN:L114-131` (faixas de 5) · `BENEFICIARIO.ddm` `BJ` (01-05 ou 99) · `PROGRAMA-SOCIAL.ddm` `FA` (6 grupos) · RN-005 (01-27) | 🔴 **Crítico.** Bloqueia a modelagem de região no sistema-alvo. |
+| M-35 | O 13º é proporcional aos meses ativos (comentário) ou valor cheio (código)? | `CALCBENF.NSN:L234-241`; `REGRAS-NEGOCIO-2012.md` §6 ("pro rata" — Alta prioridade) | 🔴 **Crítico.** É o cálculo pro rata que a doc declarou não documentado. |
+| M-36 | Por que `CALCBENF` grava pagamento sem número e sem verificar duplicidade na competência? | `CALCBENF.NSN:L271-283` vs `BATCHPGT.NSN:L200-210, L323` | 🔴 **Crítico.** Pode gerar pagamentos duplicados e sem chave. |
+| M-37 | A vigência do desconto deve ser avaliada na data de hoje ou na competência do pagamento? | `CALCDSCT.NSN:L111-118` | 🟠 Alto. Reprocessamento aplica descontos errados. |
+| M-38 | Quando o teto de 30% é atingido, o correto é truncar o total (código) ou descartar descontos por prioridade (RN-023)? | `CALCDSCT.NSN:L179-184`; RN-023 | 🔴 **Crítico.** No código, um desconto judicial já somado pode ser apagado por um desconto comum posterior. |
+| M-39 | Por que `CALCDSCT` e `CALCCORR` atualizam o pagamento sem recalcular o valor líquido? | `CALCDSCT.NSN:L191-196`; `CALCCORR.NSN:L160-170` | 🔴 **Crítico.** O valor efetivamente pago fica inconsistente com bruto e desconto. |
+| M-40 | Por que a rotina chamada `CALC-INDICE-ACUM` aplica um único mês de índice em vez de acumular o período? | `CALCCORR.NSN:L191-206` | 🔴 **Crítico.** A correção retroativa não corrige retroativamente. |
+| M-41 | Por que a tabela de IPCA só tem 2010–2012 se o cabeçalho declara carga até 2014, e o programa foi alterado em 2014? | `CALCCORR.NSN:L47-99` | 🟠 Alto. Correções fora desses 3 anos resultam em zero, sem aviso. |
+| M-42 | Beneficiários da região 99 e beneficiários não localizados são somados ao Centro-Oeste. É intencional? | `BATCHREL.NSN:L127-129` | 🟠 Alto. Distorce o consolidado usado para prestação de contas. |
+| M-43 | O relatório deve arredondar (código do relatório) ou truncar (código do pagamento e RN-014)? | `BATCHREL.NSN:L133-140` e comentário `L134` | 🔴 **Crítico.** Os totais do relatório **não fecham** com a soma dos pagamentos. Divergência conhecida e documentada no próprio código. |
+| M-44 | Qual é o significado real das situações de pagamento `P`, `C` e `E`? | `PAGAMENTO.ddm` campo `DA` vs `BATCHREL.NSN:L78-83` vs `RELPGT.NSN:L126-141` vs `BATCHCON.NSN:L174-196` | 🔴 **Crítico.** Três interpretações diferentes no mesmo sistema. Um pagamento confirmado é impresso como "CANCELADO". |
+| M-45 | Por que a quebra de subtotal é por programa se a leitura é ordenada por competência? | `RELPGT.NSN:L81, L92-99` | 🟠 Alto. Subtotais fragmentados e não somáveis. |
+| M-46 | Por que existem duas máscaras de CPF diferentes, e por que a mais fraca é usada no relatório impresso? | `RELPGT.NSN:L108-112` vs `CONSBENF.NSN:L175-190` | 🔴 **Crítico.** Exposição de dado pessoal em papel. |
+| M-47 | Quem autorizou ocultar os eventos de exclusão do relatório oficial de auditoria? | `RELAUDIT.NSN:L100-108`; cabeçalho "2014 — LIMPEZA RELATORIO"; `AUDITORIA.ddm` NOTA2; IN-TCU 63/2010 | 🔴 **Crítico — o mais grave do Estágio 1.** Descumprimento potencial de obrigação legal de trilha de auditoria. |
+
 > 💡 Duplique a seção acima para cada programa `.NSN` lido pelo seu par.
 
 ## Resumo Geral
 
+**Cobertura: 15 de 15 programas Natural e 4 de 4 DDMs. Estágio 1 completo.**
+
 | Métrica | Valor |
 | --- | ---: |
-| Programas Natural lidos | 1 de 15 (`VALELEG.NSN`) |
-| DDMs cruzados | 1 de 4 (`BENEFICIARIO.ddm`) |
+| Programas Natural lidos | **15 de 15** |
+| DDMs cruzados | **4 de 4** |
 | Documentos históricos cruzados | 1 de 3 (`REGRAS-NEGOCIO-2012.md`) |
-| Blocos condicionais examinados | 20 (`IF`/`DECIDE`/`FOR`) — 100% do programa |
-| Regras Confirmadas | 4 |
-| Regras Inferidas | 10 |
-| Mistérios (regra existe, intenção incerta) | 6 |
-| Mistérios (regra documentada, código ausente) | 4 |
-| **Total de regras candidatas** | **20** |
+| Blocos condicionais examinados | 100% dos 15 programas |
+| **Total de regras candidatas** | **156** |
+| Regras Confirmadas | 23 |
+| Regras Inferidas | 76 |
+| Regras classificadas como Mistério | 57 |
+| **Perguntas em aberto registradas** | **47** (`M-01` … `M-47`) |
+| Das quais críticas 🔴 | **23** |
+
+### Cobertura por programa
+
+| Par | Programa | Regras | Confirmadas | Inferidas | Mistérios |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 1 · Visão | `CADBENEF.NSN` | 12 | 5 | 5 | 2 |
+| 1 · Visão | `CADDEPEND.NSN` | 8 | 0 | 6 | 2 |
+| 1 · Visão | `CADPROG.NSN` | 5 | 0 | 4 | 1 |
+| 2 · Arquitetura | `BATCHPGT.NSN` | 20 | 4 | 8 | 8 |
+| 2 · Arquitetura | `BATCHREL.NSN` | 8 | 0 | 3 | 5 |
+| 2 · Arquitetura | `BATCHCON.NSN` | 12 | 0 | 7 | 5 |
+| 3 · Implementação | `CALCBENF.NSN` | 12 | 3 | 3 | 6 |
+| 3 · Implementação | `CALCCORR.NSN` | 9 | 1 | 3 | 5 |
+| 3 · Implementação | `CALCDSCT.NSN` | 12 | 2 | 6 | 4 |
+| 4 · Qualidade | `VALBENEF.NSN` | 9 | 2 | 5 | 2 |
+| 4 · Qualidade | `VALDOCS.NSN` | 4 | 1 | 2 | 1 |
+| 4 · Qualidade | `VALELEG.NSN` | 20 | 4 | 10 | 6 |
+| 5 · Operações | `CONSBENF.NSN` | 9 | 1 | 5 | 3 |
+| 5 · Operações | `RELPGT.NSN` | 8 | 0 | 4 | 4 |
+| 5 · Operações | `RELAUDIT.NSN` | 8 | 0 | 5 | 3 |
+| | **Total** | **156** | **23** | **76** | **57** |
+
+### Os 6 mistérios que devem abrir a Passagem #1
+
+Estes bloqueiam decisão de escopo. Nenhum pode ser resolvido pelo agente — todos precisam de validação humana.
+
+| ID | Assunto | Por que bloqueia |
+| --- | --- | --- |
+| **M-47** | Relatório de auditoria oculta exclusões | Possível descumprimento de obrigação legal (IN-TCU 63/2010). Escalar antes de qualquer decisão técnica. |
+| **M-14** | Suspensão automática acima de 75 anos | Remove o benefício de todo idoso, sem base documental. |
+| **M-44** | Significado real das situações `P`, `C` e `E` | Três interpretações no mesmo sistema; um pagamento confirmado é reportado como cancelado. |
+| **M-34** | Quatro codificações regionais incompatíveis | Bloqueia a modelagem de região no schema-alvo. |
+| **M-20 / M-24** | Cálculo e reajuste duplicados | O batch que paga 4,2 milhões de pessoas usa a própria cópia da fórmula; o reajuste é aplicado duas vezes. |
+| **M-18 / M-19** | Backdoors de CPF | `000.000.000-00` é válido, e 8 prefixos anulam toda a validação documental. |
+
+### O que ainda falta no Estágio 1
+
+| Artefato | Estado |
+| --- | --- |
+| [`mysteries-found.md`](mysteries-found.md) | ❌ Os 47 mistérios precisam ser formalizados com responsável e status → `/catalog-mysteries` |
+| [`dependency-map.md`](dependency-map.md) | ❌ Vazio → `/map-dependencies`. Atenção: o call graph tem **zero arestas** (E-01); o mapa real é de acesso a dados |
+| [`glossary.md`](glossary.md) | ❌ 0 de 15 termos |
+| [`discovery-report.md`](discovery-report.md) | ❌ Vazio → `/discovery-report` |
+| Documentação histórica | 🟡 `MANUAL-TECNICO-SIFAP-2008.md` e `ARQUITETURA-ORIGINAL-1997.md` ainda não cruzados |
 
 ---
 
