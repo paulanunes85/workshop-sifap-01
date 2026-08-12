@@ -1,0 +1,76 @@
+---
+name: "tdd"
+agent: "implementer"
+description: "Conduza uma feature por um ciclo TDD red-green-refactor rigoroso. Um teste falhando, o menor código que passa e então refatoração."
+tools: ["search", "edit", "execute"]
+---
+<!-- markdownlint-disable MD013 MD025 MD026 MD028 MD029 MD034 MD040 MD051 MD060 -->
+
+# /tdd
+
+## Objetivo
+
+Você produzirá um ciclo TDD completo para um único comportamento no SIFAP 2.0. O entregável são três commits — `red`, `green`, `refactor` — cada um separado. Nenhum código de produção é escrito sem um teste falhando, e nenhum teste é escrito para passar imediatamente.
+
+## Entradas
+
+Peça ao usuário o que estiver faltando.
+
+- O comportamento a descobrir, em linguagem simples.
+- O `REQ-ID` vinculado em `specs/<NNN>-<feature>/spec.md`.
+- O arquivo ou classe alvo. Se não existir, diga isso — TDD também guia o design, então criar é aceitável.
+- O framework de teste — JUnit 5 + AssertJ para Java, Vitest + Testing Library para TypeScript.
+
+## Processo
+
+Você executa exatamente três fases. Não as compacte.
+
+### Fase 1 — RED (escreva o teste que falha)
+
+1. Escolha o **caso não trivial mais simples** para o comportamento. Não o caso vazio, nem o catastrófico — o menor caso que exercita lógica real.
+2. Nomeie o teste pelo comportamento, não pelo método: `should_<expected>_when_<condition>`, não `test1`.
+3. Use estrutura Given/When/Then ou Arrange/Act/Assert, com linhas em branco entre as seções.
+4. Execute o teste. Confirme que falha. Leia a mensagem de falha e confirme que falha pelo motivo esperado (erro de compilação, incompatibilidade de assertion — não erro de setup).
+5. Commit: `test(<scope>): red — <short behavior description>`.
+
+### Fase 2 — GREEN (menor código para passar)
+
+6. Escreva a **menor quantidade de código de produção** que faça o teste passar. "Fake it till you make it" é permitido: retornar um valor fixo é aceitável no primeiro ciclo.
+7. Execute o teste único. Confirme verde. Execute a suíte completa. Confirme que continua verde.
+8. Commit: `feat(<scope>): green — implement REQ-XXX (minimal)`.
+
+### Fase 3 — REFACTOR (melhore com tudo verde)
+
+9. Procure duplicação, nomes que mentem, primitive obsession. Aplique uma pequena manobra de Fowler (Extract Method, Inline Variable, Rename).
+10. Execute todos os testes após cada micro-passo. Eles devem permanecer verdes.
+11. Pare quando o design estiver bom o suficiente para o próximo ciclo, não perfeito.
+12. Commit: `refactor(<scope>): <short description>`.
+
+## Saída
+
+Sua resposta final deve incluir:
+
+- **O comportamento descoberto** — uma frase.
+- **Os três commits** — mensagem, arquivos tocados e resultado de teste de cada um.
+- **O arquivo de teste** — conteúdo completo.
+- **O código de produção** — conteúdo completo após a fase de refatoração.
+- **Dica do próximo ciclo** — que teste você escreveria em seguida (limite, erro, segunda variação). Não o implemente.
+
+## Antipadrões
+
+- Escrever o teste e o código juntos. Isso é verificação, não TDD.
+- Pular a fase de refatoração. A maior parte do valor de design mora ali.
+- Dois testes falhando ao mesmo tempo. Um red por vez.
+- Testar métodos privados. Teste pela interface pública.
+- Escrever um primeiro teste gigante que cobre seis casos. Dê passos menores.
+- Mockar tudo. Um teste que mocka todo colaborador não testa nada.
+- "Refatorar" mudando comportamento. Se o teste muda, você trapaceou.
+
+## Critérios de sucesso
+
+- [ ] Existem três commits separados: `test:` (red), `feat:` (green), `refactor:`.
+- [ ] O commit red é reproduzivelmente vermelho — você consegue fazer checkout desse commit e o build falha.
+- [ ] O commit green é o mínimo para passar — um método, com valor fixo se necessário.
+- [ ] O commit refactor altera estrutura, não comportamento. Nomes de teste e assertions permanecem inalterados.
+- [ ] A suíte completa está verde no final.
+- [ ] O comportamento descoberto mapeia exatamente para um critério de aceitação de um `REQ-ID`.
