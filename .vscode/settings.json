@@ -1,0 +1,7 @@
+{
+    "python.analysis.extraPaths": [
+        "/Users/paulasilva/.vscode-insiders/extensions/ms-security.ms-sentinel-2.2.0/python",
+        "/Users/paulasilva/.vscode-insiders/extensions/ms-security.ms-sentinel-2.3.0/python",
+        "/home/codespace/.vscode-remote/extensions/ms-security.ms-sentinel-2.3.0/python"
+    ]
+}
